@@ -1,2 +1,2 @@
-# Preprocessing-of-Business-Document-Understanding
+# Page-Stream-Segmentation-of-Business-Documents
 Bachelor thesis project
