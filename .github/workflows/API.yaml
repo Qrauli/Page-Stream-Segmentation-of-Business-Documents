@@ -11,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
 
       - name: Create Docker Network
         run: docker network create data
@@ -23,7 +23,7 @@ jobs:
         run: docker run -d -p 80:80 --network data local
 
       - name: Run Newman
-        run: docker run --network data postman/newman:latest run Test_API.json --reporters cli,junit --reporter-junit-export results.xml
+        run: docker run --workdir /github/workspace --network data postman/newman:latest run Test_API.json --reporters cli,junit --reporter-junit-export results.xml
 
       - name: Report
         uses: dorny/test-reporter@v1
