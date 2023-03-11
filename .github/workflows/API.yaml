@@ -23,7 +23,7 @@ jobs:
         run: docker run -d -p 80:80 --network data local
 
       - name: Run Newman
-        run: docker run --network data postman/newman:latest run /tests/Test_API.postman_collection.json --reporters cli,junit --reporter-junit-export results.xml
+        run: docker run --network data postman/newman:latest run Test_API.json --reporters cli,junit --reporter-junit-export results.xml
 
       - name: Report
         uses: dorny/test-reporter@v1
