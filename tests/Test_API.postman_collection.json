@@ -11,7 +11,7 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "127.0.0.1/predict",
+					"raw": "http://modelcontainer:80/predict",
 					"host": [
 						"127",
 						"0",
