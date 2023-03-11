@@ -12,12 +12,11 @@
 				"header": [],
 				"url": {
 					"raw": "http://modelcontainer:80/predict",
+					"protocol": "http",
 					"host": [
-						"127",
-						"0",
-						"0",
-						"1"
+						"modelcontainer"
 					],
+					"port": "80",
 					"path": [
 						"predict"
 					]
