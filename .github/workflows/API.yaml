@@ -13,15 +13,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Create Docker Network
+        run: docker network create data
+
       - name: Build docker images
         run: docker build -t local .
 
       - name: Run docker container
-        run: docker run -d -p 80:80 local
+        run: docker run -d -p 80:80 --network data local
 
       - name: Run Newman
         uses: docker://postman/newman:latest
         with:
+          options: --network data
           args: run ./tests/Test_API.postman_collection.json --reporters cli,junit --reporter-junit-export results.xml
 
       - name: Report
