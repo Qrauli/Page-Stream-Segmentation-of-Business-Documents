@@ -3,9 +3,17 @@ from fastapi.responses import StreamingResponse
 import io
 import zipfile
 
-app = FastAPI(title="API", description="API for PSS", version="1.0")
+tags_metadata = [
+    {
+        "name": "prediction",
+        "description": "Attaching a PDF File will split it into individual documents and return them in a zip file",
+    }
+]
 
-@app.post('/predict', tags=["predictions"])
+
+app = FastAPI(title="API", description="API for PSS", version="1.0", openapi_tags=tags_metadata)
+
+@app.post('/predict', tags=["prediction"])
 async def get_prediction(file: UploadFile):
     if file.content_type != "application/pdf":
         raise HTTPException(400, detail="Invalid document type")
