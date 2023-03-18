@@ -10,14 +10,15 @@ import h5py
 from keras.models import Model
 from PIL import Image
 import os
+import time
 
-from transformers import LayoutLMv3Config, LayoutLMModel, LayoutLMv3Tokenizer, LayoutLMTokenizer
+from transformers import LayoutLMv3Config, TFLayoutLMModel, LayoutLMv3Tokenizer, LayoutLMTokenizer
 
 
-class Generator(Sequence):
+class Generator:
 
     def __init__(self, path_data: str, path_cache_folder: str = None, max_seq_length: int = 100,
-                 input_img_size: tuple = (512, 512)):
+                 input_img_size: tuple = (224, 224)):
         self.path_data = Path(path_data)
         self.max_seq_length = max_seq_length
         self.path_cache_folder = path_cache_folder + ".hdf5"
@@ -27,7 +28,7 @@ class Generator(Sequence):
         all_path_tsv = list(self.path_data.glob("**/*.tsv"))
         self.page_ids = np.sort([path.stem for path in all_path_tsv])
         if os.path.isfile(self.path_cache_folder):
-            os.remove(self.path_cache_folder)
+            return
         self.hf = h5py.File(self.path_cache_folder, 'a')
         df = create_df(self.page_ids)
 
@@ -45,37 +46,6 @@ class Generator(Sequence):
             image = image_to_tensor(tf.convert_to_tensor(img), input_img_size)
             group.create_dataset('image', data=image, compression="gzip")
         self.hf.close()
-
-    def __len__(self):
-        """
-        :returns number of batches per epoch
-        """
-        return len(self.page_ids)
-
-    def __getitem__(self, idx):
-        """
-        receives call from keras (index) and grabs corresponding data batch
-        :param index:
-        :return:
-        """
-        page_id = self.page_ids[idx]
-        self.hf = h5py.File(self.path_cache, 'r')
-        # ocr
-        input_ids = tf.convert_to_tensor(np.array(self.hf[page_id + '/input_ids']))
-        bbox = tf.convert_to_tensor(np.array(self.hf[page_id + '/bbox']))
-        attention_mask = tf.convert_to_tensor(np.array(self.hf[page_id + '/attention_mask']))
-        token_type_ids = tf.convert_to_tensor(np.array(self.hf[page_id + '/token_type_ids']))
-        ocr_input = {"input_ids": input_ids, 'bbox': bbox, 'attention_mask': attention_mask,
-                     "token_type_ids": token_type_ids}
-        # image
-        image = tf.convert_to_tensor(np.array(self.hf[page_id + '/image']))
-
-        self.hf.close()
-
-        # get label
-        label = get_label(page_id)
-
-        return ocr_input, image, label, page_id
 
 
 def generator(page_ids, path_cache):
@@ -102,15 +72,20 @@ def generator(page_ids, path_cache):
         yield ocr_input, image, label, page_id
         i += 1
 
+
 # Image preprocessing
 def image_to_tensor(img, input_img_size):
-    #img = tf.image.rgb_to_grayscale(img)
-    #img = tf.image.grayscale_to_rgb(img)
-    img = img[tf.newaxis, ..., tf.newaxis]
+    # img = tf.image.rgb_to_grayscale(img)
+    img = img[..., tf.newaxis]
+    img = tf.image.grayscale_to_rgb(img)
+    # print(img.get_shape())
+    # img = img[tf.newaxis, ..., tf.newaxis]
     img = tf.image.resize(img, input_img_size)
-    #layer = layers.Normalization(mean=[0.485, 0.456, 0.406], variance=[np.square(0.229), np.square(0.224), np.square(0.225)])
-    #img = layer(img)
+    # img = tf.transpose(img, perm=[2, 0, 1])
+    # layer = layers.Normalization(mean=[0.485, 0.456, 0.406], variance=[np.square(0.229), np.square(0.224),
+    # np.square(0.225)]) img = layer(img)
     return img
+
 
 def get_label(page_id):
     split = page_id.split('-')
@@ -208,7 +183,7 @@ def tokenize_from_ocr(path_tsv, tokenizer, max_seq_length):
         temp_input_ids = input_ids.numpy()
         temp_input_ids[-1] = 102
         input_ids = tf.convert_to_tensor(temp_input_ids)
-        #input_ids[-1] = 102
+        # input_ids[-1] = 102
         attention_mask = attention_mask[:max_seq_length]
         token_type_ids = token_type_ids[:max_seq_length]
     bbox = token_boxes
@@ -216,30 +191,212 @@ def tokenize_from_ocr(path_tsv, tokenizer, max_seq_length):
     return input_ids, bbox, attention_mask, token_type_ids
 
 
+def create_model():
+    # A1 = keras.Input(shape=(30,), name='A1')
+    # A2 = layers.Dense(8, activation='relu', name='A2')(A1)
+    # A3 = layers.Dense(30, activation='relu', name='A3')(A2)
+
+    # B2 = layers.Dense(40, activation='relu', name='B2')(A2)
+    # B3 = layers.Dense(30, activation='relu', name='B3')(B2)
+
+    # merged = Model(inputs=[A1], outputs=[A3, B3])
+
+    layoutlm = TFLayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
+    resnet = keras.applications.ResNet50V2(weights="imagenet")
+
+    input_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='input_ids')
+    bbox_layer = tf.keras.Input(shape=(None, 4), dtype=tf.int32, name='bbox')
+    token_type_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='token_type_ids')
+    attention_mask_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='attention_mask')
+
+    layoutlm_layer = layoutlm({'input_ids': input_ids_layer, 'bbox': bbox_layer, 'token_type_ids': token_type_ids_layer,
+                               'attention_mask': attention_mask_layer}).pooler_output
+    layoutlm = tf.keras.Model(inputs=[input_ids_layer, bbox_layer, token_type_ids_layer, attention_mask_layer],
+                              outputs=layoutlm_layer)
+
+    resnet = Model(resnet.input, resnet.layers[-2].output)
+
+    # sizes = [1280, 1067, 854, 641, 428, 215]
+    # 2816
+    sizes = [2347, 1878, 1409, 940, 471]
+    x = layers.concatenate([resnet.layers[-1].output, layoutlm_layer], 1)
+    mypermute = lambda y: keras.backend.transpose(y)
+    # x = keras.layers.Lambda(mypermute)(x)
+    # x = keras.layers.Lambda(lambda x: tf.expand_dims(x, 2))(x)
+    x = keras.layers.Lambda(lambda x: tf.expand_dims(x, 0))(x)
+
+    # x = layers.Permute((2,1))(x)
+    # x = keras.Input(shape=(sizes[0],))
+
+    for i in range(1, 5):
+        x = layers.Conv1D(filters=sizes[i], kernel_size=3, strides=1, padding="same", data_format="channels_last",
+                          dilation_rate=1, groups=1, activation='relu', use_bias=True)(x)
+        x = layers.Dropout(0.2)(x)
+    x = layers.Conv1D(filters=2, kernel_size=3, strides=1, padding="same", data_format="channels_last",
+                      dilation_rate=1, groups=1, activation='relu', use_bias=True)(x)
+
+    x = keras.layers.Lambda(lambda x: tf.squeeze(x))(x)
+    x = layers.Softmax()(x)
+
+    # model.add(layers.Dense(2, activation="softmax"))
+    # model.compile(
+    # optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"],
+    # )
+
+    model = keras.Model(
+        inputs=[input_ids_layer, bbox_layer, token_type_ids_layer, attention_mask_layer, resnet.input],
+        outputs=x
+    )
+    return model
+
+def validate(model, generator):
+
+    return 0
+
+
 def main():
-   # configuration = LayoutLMv3Config()
-   # layoutlm = LayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
+    model = create_model()
 
-   # resnet = keras.applications.ResNet50(weights="imagenet")
-   # resnet = Model(resnet.input, resnet.layers[-2].output)
+    # configuration = LayoutLMv3Config()
+    # layoutlm = TFLayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
+    # layoutlm.build([None, 32, 32, 3])
+    # inputs = tf.keras.Input(shape=(224, 224, 3))
+    # layoutlm.call(inputs)
 
-    traingen = Generator("../../TABME/data/train1/", "../../TABME/cache/train1")
+    # input_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='input_ids')
+    # bbox_layer = tf.keras.Input(shape=(None, 4), dtype=tf.int32, name='bbox')
+    # token_type_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='token_type_ids')
+    # attention_mask_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='attention_mask')
 
-    ds_counter = tf.data.Dataset.from_generator(lambda: generator(traingen.page_ids, traingen.path_cache_folder), output_types=({"input_ids": tf.int64, 'bbox': tf.float64, 'attention_mask': tf.float64,
-                     "token_type_ids": tf.int64}, tf.int64, tf.int64, tf.string))
+    # layoutlm_layer = layoutlm({'input_ids': input_ids_layer, 'bbox': bbox_layer, 'token_type_ids': token_type_ids_layer, 'attention_mask': attention_mask_layer}).pooler_output
+    # layoutlm = tf.keras.Model(inputs=[input_ids_layer, bbox_layer, token_type_ids_layer, attention_mask_layer], outputs=layoutlm_layer)
 
-    for count_batch in ds_counter.batch(64).take(-1):
-        inputs, image, labels, pageids = count_batch
-        #print(tf.squeeze(image))
-        print(labels)
+    # print(layoutlm.summary())
+    # layoutlm = Model(layoutlm.input, layoutlm.layers[-1].output)
 
-# build_model(keras_tuner.HyperParameters())
-# tuner = keras_tuner.Hyperband(build_model,
-#           objective='val_accuracy',
-#   max_epochs=10,
-#   factor=3,
-#   directory='my_dir',
-#  project_name='intro_to_kt')
+    # resnet = keras.applications.ResNet50V2(weights="imagenet")
+    # resnet = Model(resnet.input, resnet.layers[-2].output)
+
+    traingen = Generator("../../TABME/data/train/", "../../TABME/cache/train")
+    valgen = Generator("../../TABME/data/val/", "../../TABME/cache/validation")
+
+    ds_counter = tf.data.Dataset.from_generator(lambda: generator(traingen.page_ids, traingen.path_cache_folder),
+                                                output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
+                                                               'attention_mask': tf.int32,
+                                                               "token_type_ids": tf.int32}, tf.int64, tf.int64,
+                                                              tf.string))
+
+    ds_counter_val = tf.data.Dataset.from_generator(lambda: generator(valgen.page_ids, valgen.path_cache_folder),
+                                                output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
+                                                               'attention_mask': tf.int32,
+                                                               "token_type_ids": tf.int32}, tf.int64, tf.int64,
+                                                              tf.string))
+
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+                  loss=tf.keras.losses.BinaryCrossentropy(),
+                  metrics=['accuracy'])
+
+    loss_fn = keras.losses.CategoricalCrossentropy(from_logits=True)
+    optimizer = keras.optimizers.Adam(learning_rate=1e-5)
+    train_acc_metric = keras.metrics.CategoricalAccuracy()
+
+    # val_acc_metric = keras.metrics.SparseCategoricalAccuracy()
+
+    epochs = 30
+    train_acc_old = 0
+    min_val_loss = 1
+    early_stopping_cnt = 0
+    for epoch in range(epochs):
+        print("\nStart of epoch %d" % (epoch,))
+        start_time = time.time()
+        counter = 0
+        iterator = iter(ds_counter.batch(64).take(-1))
+        while True:
+            try:
+                count_batch = next(iterator)
+                # Do something with the batch
+                counter = counter + 1
+                inputs, image, labels, pageids = count_batch
+                input_ids = inputs['input_ids']
+                bbox = inputs['bbox']
+                attention_mask = inputs['attention_mask']
+                token_type_ids = inputs['token_type_ids']
+                list1 = tf.unstack(labels)
+                list1[0] = 1
+                list0 = [1 if i == 0 else 0 for i in list1]
+                labels = tf.stack(np.transpose([list1, list0]))
+                # outputs = model([input_ids, bbox, attention_mask, token_type_ids, image])
+                with tf.GradientTape() as tape:
+                    logits = model([input_ids, bbox, attention_mask, token_type_ids, image], training=True)
+                    loss_value = loss_fn(labels, logits)
+
+                grads = tape.gradient(loss_value, model.trainable_weights)
+                optimizer.apply_gradients(zip(grads, model.trainable_weights))
+
+                # Update training metric.
+                train_acc_metric.update_state(labels, logits)
+
+                # Log every 200 batches.
+                if counter % 50 == 0:
+                    print(
+                        "Training loss (for one batch) at step %d: %.4f"
+                        % (counter, float(loss_value))
+                    )
+                    print("Seen so far: %d samples" % ((counter + 1) * 64))
+
+                if counter % 1000 == 0:
+                    val_loss = validate(model, valgen)
+                    if val_loss < min_val_loss:
+                        model.save("my_model")
+                        min_val_loss = val_loss
+                    else:
+                        early_stopping_cnt += 1
+                        if early_stopping_cnt > 5:
+                            print("Early Stopping: No improvement over last 5 models")
+                            break
+
+                # Display metrics at the end of each epoch.
+            except tf.errors.InvalidArgumentError:
+                print("Skipping batch with malformed tensor.")
+                continue
+            except tf.errors.OutOfRangeError:
+                print("End of dataset.")
+                break
+        #for count_batch in ds_counter.batch(64).take(-1):
+        train_acc = train_acc_metric.result()
+        if train_acc > train_acc_old:
+            train_acc_old = train_acc
+            model.save("my_model")
+
+        print("Training acc over epoch: %.4f" % (float(train_acc),))
+
+    # for count_batch in ds_counter.batch(64).take(-1):
+    # inputs, image, labels, pageids = count_batch
+    # print(tf.squeeze(image))
+    # print(labels)
+    # print(image)
+    # imageinformation = resnet(image)
+    # print(imageinformation.get_shape())
+    # input_ids = inputs['input_ids']
+    # bbox = inputs['bbox']
+    # attention_mask = inputs['attention_mask']
+    # token_type_ids = inputs['token_type_ids']
+    # textinformation = layoutlm([input_ids, bbox, token_type_ids, attention_mask])
+    # textinformation = layoutlm(input_ids=input_ids, bbox=bbox, attention_mask=attention_mask, token_type_ids=token_type_ids)['pooler_output']
+    # print(textinformation.get_shape())
+    # features = tf.concat([imageinformation, textinformation], 1)
+    # print(features.get_shape())
+    # outputs = model([input_ids, bbox, attention_mask, token_type_ids, image])
+    # print(outputs)
+    # print(outputs.get_shape())
+    # print(output)
+    # build_model(keras_tuner.HyperParameters())
+    # tuner = keras_tuner.Hyperband(build_model,
+    #           objective='val_accuracy',
+    #   max_epochs=10,
+    #   factor=3,
+    #   directory='my_dir',
+    #  project_name='intro_to_kt')
 
 
 if __name__ == "__main__":
