@@ -5,6 +5,8 @@ import zipfile
 from PyPDF2 import PdfReader, PdfWriter
 from contextlib import asynccontextmanager
 from tensorflow import keras
+from pdf2image import convert_from_bytes
+import pytesseract
 
 tags_metadata = [
     {
@@ -21,10 +23,12 @@ model = []
 async def lifespan(app: FastAPI):
     # Load the ML model
     global model
-    model = keras.models.load_model('path/to/location')
+    # model = keras.models.load_model('path/to/location')
+    model = "t"
     yield
     # Clean up the ML models and release the resources
-    keras.backend.clear_session()
+    # keras.backend.clear_session()
+    model = "r"
 
 app = FastAPI(title="API", description="API for PSS", version="1.0", openapi_tags=tags_metadata, lifespan=lifespan)
 
@@ -76,6 +80,7 @@ async def get_prediction(file: UploadFile):
 
 
 async def predict(pdf_content: bytes):
+
     # temporary split calculation
     pdf_reader = PdfReader(io.BytesIO(pdf_content))
     count = len(pdf_reader.pages)
