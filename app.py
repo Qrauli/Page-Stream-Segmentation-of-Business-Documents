@@ -3,6 +3,8 @@ from fastapi.responses import StreamingResponse
 import io
 import zipfile
 from PyPDF2 import PdfReader, PdfWriter
+from contextlib import asynccontextmanager
+from tensorflow import keras
 
 tags_metadata = [
     {
@@ -11,8 +13,20 @@ tags_metadata = [
     }
 ]
 
-app = FastAPI(title="API", description="API for PSS", version="1.0", openapi_tags=tags_metadata)
 
+model = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load the ML model
+    global model
+    model = keras.models.load_model('path/to/location')
+    yield
+    # Clean up the ML models and release the resources
+    keras.backend.clear_session()
+
+app = FastAPI(title="API", description="API for PSS", version="1.0", openapi_tags=tags_metadata, lifespan=lifespan)
 
 @app.post('/predict', tags=["prediction"])
 async def get_prediction(file: UploadFile):
