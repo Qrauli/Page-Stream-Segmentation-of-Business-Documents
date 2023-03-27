@@ -10,5 +10,9 @@ tensorflow~=2.11.0
 keras~=2.11.0
 transformers==4.26.1
 pytesseract==0.3.10
-pdf2image
-pandas
+pdf2image~=1.16.3
+pandas~=1.4.4
+numpy~=1.21.5
+pillow~=9.2.0
+h5py~=3.7.0
+pathlib~=1.0.1
