@@ -93,7 +93,7 @@ async def get_prediction(file: UploadFile):
 async def predict(pdf_content: bytes):
     global tokenizer
     global model
-    images = convert_from_bytes(pdf_content)
+    images = convert_from_bytes(pdf_content, grayscale=True)
 
     # convert each image to input data
     input_data = []
@@ -115,31 +115,39 @@ async def predict(pdf_content: bytes):
         # pil_images.append(pil_image)
 
     batch_generator = tf.data.Dataset.from_generator(lambda: generator(input_data),
-                                                     output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
-                                                                    'attention_mask': tf.int32,
-                                                                    "token_type_ids": tf.int32}, tf.int64, tf.int64,
-                                                                   tf.string))
+                                                     output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.int64))
+
     input_ids, bbox, attention_mask, token_type_ids, image = batch_generator.batch(len(input_data)).get_single_element()
     classification = model([input_ids, bbox, attention_mask, token_type_ids, image])
     # classification[0] = 1
-    print(classification)
+    classification = classification.numpy()
+    categories = []
+    if classification.ndim == 1:
+        categories = [1]
+    else:
+        for classi in classification:
+            if classi[0] > classi[1]:
+                categories.append(1)
+            else:
+                categories.append(0)
+    categories[0] = 1
     # temporary split calculation
     pdf_reader = PdfReader(io.BytesIO(pdf_content))
     count = len(pdf_reader.pages)
-    categories = []
-    for i in range(count):
-        categories.append(1)
+    # categories = []
+    # for i in range(count):
+        # categories.append(1)
     return categories
 
 
 def generator(input_data):
     i = 0
     while i < len(input_data):
-        input_ids = tf.convert_to_tensor(np.array(input_data[i].input_ids))
-        bbox = tf.convert_to_tensor(np.array(input_data[i].bbox))
-        attention_mask = tf.convert_to_tensor(np.array(input_data[i].attention_mask))
-        token_type_ids = tf.convert_to_tensor(np.array(input_data[i].token_type_ids))
-        image = tf.convert_to_tensor(np.array(input_data[i].image))
+        input_ids = tf.convert_to_tensor(np.array(input_data[i]["input_ids"]))
+        bbox = tf.convert_to_tensor(np.array(input_data[i]["bbox"]))
+        attention_mask = tf.convert_to_tensor(np.array(input_data[i]["attention_mask"]))
+        token_type_ids = tf.convert_to_tensor(np.array(input_data[i]["token_type_ids"]))
+        image = tf.convert_to_tensor(np.array(input_data[i]["image"]))
 
         yield input_ids, bbox, attention_mask, token_type_ids, image
         i += 1
