@@ -18,9 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Collect docker logs
-        uses: jwalton/gh-docker-logs@v2
-
       - name: Create Docker Network
         run: docker network create data
 
@@ -42,5 +39,5 @@ jobs:
           reporter: java-junit
           fail-on-error: true
 
-      - name: Collect docker logs 2
+      - name: Collect docker logs
         uses: jwalton/gh-docker-logs@v2
