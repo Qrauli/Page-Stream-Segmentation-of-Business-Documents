@@ -18,6 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
+      - name: Collect docker logs
+        uses: jwalton/gh-docker-logs@v2
+
       - name: Create Docker Network
         run: docker network create data
 
@@ -39,11 +42,5 @@ jobs:
           reporter: java-junit
           fail-on-error: true
 
-      - name: Fetch docker logs
-        run: docker logs modelcontainer > docker-logs.txt
-
-      - name: Upload docker logs
-        uses: actions/upload-artifact@v3
-        with:
-          name: docker-logs
-          path: docker-logs.txt
+      - name: Collect docker logs
+        uses: jwalton/gh-docker-logs@v2
