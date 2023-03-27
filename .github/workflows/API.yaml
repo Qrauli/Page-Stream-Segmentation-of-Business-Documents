@@ -42,5 +42,5 @@ jobs:
           reporter: java-junit
           fail-on-error: true
 
-      - name: Collect docker logs
+      - name: Collect docker logs 2
         uses: jwalton/gh-docker-logs@v2
