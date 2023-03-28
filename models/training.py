@@ -14,7 +14,7 @@ from transformers import TFLayoutLMModel, LayoutLMTokenizer
 
 
 class Generator:
-
+    """class storing and creating training data with tokenizers and h5py cache files"""
     def __init__(self, path_data: str, path_cache_folder: str = None, max_seq_length: int = 100,
                  input_img_size: tuple = (224, 224)):
         self.path_data = Path(path_data)
@@ -28,8 +28,8 @@ class Generator:
         if os.path.isfile(self.path_cache_folder):
             return
         self.hf = h5py.File(self.path_cache_folder, 'a')
-        # df = create_df(self.page_ids)
 
+        # save each page in h5py file
         for page_id in self.page_ids:
             file_id = page_id.split('-')[0]
             path_tsv = path_data + "/" + file_id + "/" + f"{page_id}.tsv"
@@ -47,6 +47,7 @@ class Generator:
 
 
 def generator(page_ids, path_cache):
+    """generator returning extracted data of single elements"""
     i = 0
     while i < len(page_ids):
         page_id = page_ids[i]
@@ -73,6 +74,7 @@ def generator(page_ids, path_cache):
 
 # Image preprocessing
 def image_to_tensor(img, input_img_size):
+    """converts grayscale image to tensorflow tensor with resnet specifications"""
     # img = tf.image.rgb_to_grayscale(img)
     img = img[..., tf.newaxis]
     img = tf.image.grayscale_to_rgb(img)
@@ -86,6 +88,7 @@ def image_to_tensor(img, input_img_size):
 
 
 def get_label(page_id):
+    """returns the label for a training image based on its name"""
     split = page_id.split('-')
     if len(split) == 1:  # single page doc
         return 1
@@ -96,36 +99,37 @@ def get_label(page_id):
             return 0
 
 
-def build_model(hp):
-    model = keras.Sequential()
-    model.add(layers.Flatten())
-    for i in range(1, hp.Int("num_layers", 5, 10)):
-        model.add(
-            layers.Conv1D(
-                kernel_size=hp.Int("kernel", min_value=3, max_value=6, step=1),
-                strides=1,
-                padding="valid",
-                data_format="channels_last",
-                dilation_rate=1,
-                groups=1,
-                activation='relu',
-                use_bias=True
-            )
-        )
-    model.add(layers.Dense(2, activation="softmax"))
-    model.compile(
-        optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"],
-    )
-    return model
+#def build_model(hp):
+#    model = keras.Sequential()
+#    model.add(layers.Flatten())
+#    for i in range(1, hp.Int("num_layers", 5, 10)):
+#        model.add(
+#            layers.Conv1D(
+#                kernel_size=hp.Int("kernel", min_value=3, max_value=6, step=1),
+#                strides=1,
+#                padding="valid",
+#                data_format="channels_last",
+#                dilation_rate=1,
+#                groups=1,
+#                activation='relu',
+#                use_bias=True
+#            )
+#        )
+#    model.add(layers.Dense(2, activation="softmax"))
+#    model.compile(
+#        optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"],
+#    )
+#    return model
 
 
-def create_df(page_ids):
-    pages = np.array([(page_id.split('-') if len(page_id.split('-')) == 2 else [page_id, '0']) for page_id in page_ids])
-    df = pd.DataFrame(pages, columns=['doc_id', 'page_num'])
-    return df
+#def create_df(page_ids):
+#    pages = np.array([(page_id.split('-') if len(page_id.split('-')) == 2 else [page_id, '0']) for page_id in page_ids])
+#    df = pd.DataFrame(pages, columns=['doc_id', 'page_num'])
+#    return df
 
 
 def extend_box(words, boxes, tokenizer):
+    """extend box size"""
     token_boxes = []
     tokenizable_words = words
     j = 0  # index for tokenizable words
@@ -142,9 +146,7 @@ def extend_box(words, boxes, tokenizer):
 
 
 def tokenize_from_ocr(path_tsv, tokenizer, max_seq_length, dataframe=None):
-    """
-        Generate layoutlm input vectors from OCR
-    """
+    """Generate layoutlm input vectors from OCR: method taken and modified from TABME project"""
     df_ocr_page = dataframe
     if dataframe is None:
         df_ocr_page = pd.read_csv(path_tsv, sep='\t')
@@ -191,15 +193,7 @@ def tokenize_from_ocr(path_tsv, tokenizer, max_seq_length, dataframe=None):
 
 
 def create_model():
-    # A1 = keras.Input(shape=(30,), name='A1')
-    # A2 = layers.Dense(8, activation='relu', name='A2')(A1)
-    # A3 = layers.Dense(30, activation='relu', name='A3')(A2)
-
-    # B2 = layers.Dense(40, activation='relu', name='B2')(A2)
-    # B3 = layers.Dense(30, activation='relu', name='B3')(B2)
-
-    # merged = Model(inputs=[A1], outputs=[A3, B3])
-
+    """creates keras model based on pretrained models layoutlm and resnet combined with convolutional layers"""
     layoutlm = TFLayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
     resnet = keras.applications.ResNet50V2(weights="imagenet")
 
@@ -252,6 +246,7 @@ def create_model():
 
 
 def validate(model, generator):
+    """calculate validation error based on given model and generator returning validation data"""
     loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
     iterator = iter(generator.batch(30).take(-1))
     val_loss = 0
@@ -269,7 +264,6 @@ def validate(model, generator):
                 val_loss += float(loss_value)
                 print("loss: %.4f" % float(loss_value))
 
-            # Display metrics at the end of each epoch.
         except tf.errors.InvalidArgumentError:
             print("Skipping batch with malformed tensor.")
             continue
@@ -282,6 +276,7 @@ def validate(model, generator):
 
 
 def convert_batch(batch):
+    """converts created batch into data needed for model prediction and training"""
     inputs, image, labels, pageids = batch
     input_ids = inputs['input_ids']
     bbox = inputs['bbox']

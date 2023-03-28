@@ -91,35 +91,41 @@ async def get_prediction(file: UploadFile):
 
 
 async def predict(pdf_content: bytes):
+    """calculates an array of split prediction values for every page of the given pdf"""
     global tokenizer
     global model
     images = convert_from_bytes(pdf_content, grayscale=True)
 
     # convert each image to input data
     input_data = []
-    for image in images:
-        pil_image = image
-        # image_tensor = tf.convert_to_tensor(pil_image)
-        image_tensor = image_to_tensor(tf.convert_to_tensor(pil_image), (224, 224))
-        pil_image = pil_image.filter(ImageFilter.MedianFilter())
-        pil_image = pil_image.resize((1000, 1000))
-        enhancer = ImageEnhance.Contrast(pil_image)
-        pil_image = enhancer.enhance(2)
-        pil_image = pil_image.convert('1')
-        dataframe = pytesseract.image_to_data(pil_image, output_type=pytesseract.Output.DATAFRAME)
-        input_ids, bbox, attention_mask, token_type_ids = tokenize_from_ocr("", tokenizer, 100, dataframe)
-        # print(dataframe)
-        input_data.append(
-            {"image": image_tensor, "input_ids": input_ids, "bbox": bbox, "attention_mask": attention_mask,
-             "token_type_ids": token_type_ids})
-        # pil_images.append(pil_image)
+    try:
+        for image in images:
+            pil_image = image
+            image_tensor = image_to_tensor(tf.convert_to_tensor(pil_image), (224, 224))
+            pil_image = pil_image.filter(ImageFilter.MedianFilter())
+            pil_image = pil_image.resize((1000, 1000))
+            enhancer = ImageEnhance.Contrast(pil_image)
+            pil_image = enhancer.enhance(2)
+            pil_image = pil_image.convert('1')
+            dataframe = pytesseract.image_to_data(pil_image, output_type=pytesseract.Output.DATAFRAME)
+            input_ids, bbox, attention_mask, token_type_ids = tokenize_from_ocr("", tokenizer, 100, dataframe)
+            input_data.append(
+                {"image": image_tensor, "input_ids": input_ids, "bbox": bbox, "attention_mask": attention_mask,
+                "token_type_ids": token_type_ids})
 
-    batch_generator = tf.data.Dataset.from_generator(lambda: generator(input_data),
-                                                     output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.int64))
+        batch_generator = tf.data.Dataset.from_generator(lambda: generator(input_data),
+                                                        output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.int64))
 
-    input_ids, bbox, attention_mask, token_type_ids, image = batch_generator.batch(len(input_data)).get_single_element()
-    classification = model([input_ids, bbox, attention_mask, token_type_ids, image])
-    # classification[0] = 1
+        input_ids, bbox, attention_mask, token_type_ids, image = batch_generator.batch(len(input_data)).get_single_element()
+        classification = model([input_ids, bbox, attention_mask, token_type_ids, image])
+    except tf.errors.ResourceExhaustedError as e:
+        print("Not enough memory for running model prediction: Resources exhausted")
+        pdf_reader = PdfReader(io.BytesIO(pdf_content))
+        count = len(pdf_reader.pages)
+        categories = []
+        for i in range(count):
+            categories.append(1)
+        return categories
     classification = classification.numpy()
     categories = []
     if classification.ndim == 1:
@@ -132,8 +138,8 @@ async def predict(pdf_content: bytes):
                 categories.append(0)
     categories[0] = 1
     # temporary split calculation
-    pdf_reader = PdfReader(io.BytesIO(pdf_content))
-    count = len(pdf_reader.pages)
+    # pdf_reader = PdfReader(io.BytesIO(pdf_content))
+    # count = len(pdf_reader.pages)
     # categories = []
     # for i in range(count):
         # categories.append(1)
@@ -141,6 +147,7 @@ async def predict(pdf_content: bytes):
 
 
 def generator(input_data):
+    """generator returning extracted data of single elements"""
     i = 0
     while i < len(input_data):
         input_ids = tf.convert_to_tensor(np.array(input_data[i]["input_ids"]))
