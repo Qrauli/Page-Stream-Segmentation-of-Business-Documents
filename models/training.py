@@ -15,6 +15,7 @@ from transformers import TFLayoutLMModel, LayoutLMTokenizer
 
 class Generator:
     """class storing and creating training data with tokenizers and h5py cache files"""
+
     def __init__(self, path_data: str, path_cache_folder: str = None, max_seq_length: int = 100,
                  input_img_size: tuple = (224, 224)):
         self.path_data = Path(path_data)
@@ -46,11 +47,11 @@ class Generator:
         self.hf.close()
 
 
-def generator(page_ids, path_cache):
+def generator(df_pages, path_cache):
     """generator returning extracted data of single elements"""
     i = 0
-    while i < len(page_ids):
-        page_id = page_ids[i]
+    while i < len(df_pages):
+        page_id = df_pages.iloc[i]["page_id"]
         hf = h5py.File(path_cache, 'r')
         # ocr
 
@@ -70,6 +71,28 @@ def generator(page_ids, path_cache):
 
         yield ocr_input, image, label, page_id
         i += 1
+
+
+def create_df(page_ids):
+    pages = np.array([(id.split('-') + [id] if len(id.split('-')) == 2 else [id, '0', id]) for id in page_ids])
+    df = pd.DataFrame(pages, columns=['doc_id', 'page_num', 'page_id'])
+    return df
+
+
+def shuffle_df(df):
+    '''
+    Shuffle IDs while retaining the same page order within the document
+    '''
+    df_id = df.value_counts(subset='doc_id').to_frame(name='num_pages')
+    # reassign document
+    df_id = df_id.sample(frac=1)
+    df_id['order'] = range(len(df_id))
+    df['order'] = df.doc_id.apply(lambda id: df_id.loc[id, 'order'])
+    # must choose a stable sort to retain the page order within the same document
+    df = df.sort_values(by='order', kind='mergesort')
+    # reassign page order
+    df['order'] = range(len(df))
+    return df
 
 
 # Image preprocessing
@@ -99,7 +122,7 @@ def get_label(page_id):
             return 0
 
 
-#def build_model(hp):
+# def build_model(hp):
 #    model = keras.Sequential()
 #    model.add(layers.Flatten())
 #    for i in range(1, hp.Int("num_layers", 5, 10)):
@@ -122,7 +145,7 @@ def get_label(page_id):
 #    return model
 
 
-#def create_df(page_ids):
+# def create_df(page_ids):
 #    pages = np.array([(page_id.split('-') if len(page_id.split('-')) == 2 else [page_id, '0']) for page_id in page_ids])
 #    df = pd.DataFrame(pages, columns=['doc_id', 'page_num'])
 #    return df
@@ -226,7 +249,7 @@ def create_model():
         x = layers.Conv1D(filters=sizes[i], kernel_size=3, strides=1, padding="same", data_format="channels_last",
                           dilation_rate=1, groups=1, use_bias=True)(x)
         x = layers.ReLU()(x)
-        x = layers.Dropout(0.2)(x)
+        x = layers.Dropout(0.3)(x)
     x = layers.Conv1D(filters=2, kernel_size=3, strides=1, padding="same", data_format="channels_last",
                       dilation_rate=1, groups=1, use_bias=True)(x)
     x = layers.ReLU()(x)
@@ -262,7 +285,6 @@ def validate(model, generator):
                 logits = model([input_ids, bbox, attention_mask, token_type_ids, image], training=False)
                 loss_value = loss_fn(labels, logits)
                 val_loss += float(loss_value)
-                print("loss: %.4f" % float(loss_value))
 
         except tf.errors.InvalidArgumentError:
             print("Skipping batch with malformed tensor.")
@@ -322,24 +344,20 @@ def main():
 
     traingen = Generator("../../TABME/data/train/", "../../TABME/cache/train")
     valgen = Generator("../../TABME/data/val/", "../../TABME/cache/validation")
-
-    ds_counter = tf.data.Dataset.from_generator(lambda: generator(traingen.page_ids, traingen.path_cache_folder),
-                                                output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
-                                                               'attention_mask': tf.int32,
-                                                               "token_type_ids": tf.int32}, tf.int64, tf.int64,
-                                                              tf.string))
-
-    ds_counter_val = tf.data.Dataset.from_generator(lambda: generator(valgen.page_ids, valgen.path_cache_folder),
-                                                    output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
-                                                                   'attention_mask': tf.int32,
-                                                                   "token_type_ids": tf.int32}, tf.int64, tf.int64,
-                                                                  tf.string))
+    dftrain = create_df(traingen.page_ids)
+    dfval = create_df(valgen.page_ids)
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
                   loss=tf.keras.losses.BinaryCrossentropy(),
                   metrics=['accuracy'])
 
+    ds_counter_val = tf.data.Dataset.from_generator(lambda: generator(dfval, valgen.path_cache_folder),
+                                                        output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
+                                                                       'attention_mask': tf.int32,
+                                                                       "token_type_ids": tf.int32}, tf.int64, tf.int64,
+                                                                      tf.string))
+
     loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
-    optimizer = keras.optimizers.Adam(learning_rate=1e-5)
+    optimizer = keras.optimizers.experimental.AdamW(learning_rate=1e-5, weight_decay=0.01)
     train_acc_metric = keras.metrics.CategoricalAccuracy()
 
     # val_acc_metric = keras.metrics.SparseCategoricalAccuracy()
@@ -350,7 +368,19 @@ def main():
     early_stopping_cnt = 0
     for epoch in range(epochs):
         print("\nStart of epoch %d" % (epoch,))
-        start_time = time.time()
+
+        dftrain_shuffled = shuffle_df(dftrain)
+        print(dftrain_shuffled)
+
+        ds_counter = tf.data.Dataset.from_generator(lambda: generator(dftrain_shuffled, traingen.path_cache_folder),
+                                                    output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
+                                                                   'attention_mask': tf.int32,
+                                                                   "token_type_ids": tf.int32}, tf.int64, tf.int64,
+                                                                  tf.string))
+
+        # start_time = time.time()
+        # print("Total time: ")
+
         counter = 0
         iterator = iter(ds_counter.batch(64).take(-1))
         data = []
@@ -435,7 +465,7 @@ def main():
             model.save("my_model")
 
         print("Training acc over epoch: %.4f" % (float(train_acc),))
-
+        train_acc_metric.reset_state()
     # for count_batch in ds_counter.batch(64).take(-1):
     # inputs, image, labels, pageids = count_batch
     # print(tf.squeeze(image))
