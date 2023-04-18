@@ -24,10 +24,10 @@ jobs:
           python-version: 3.9
 
       - name: Install Dependencies Apt
-        uses: appleboy/setup-apt@v2
-        with:
-          update: true
-          packages: tesseract-ocr, poppler-utils
+        run: |
+          apt-get update
+          apt-get -y install tesseract-ocr
+          apt-get install poppler-utils -y 
 
       - name: Install dependencies
         run: |
