@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import io
 import zipfile
 from PyPDF2 import PdfReader, PdfWriter
@@ -42,6 +43,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="API", description="API for PSS", version="1.0", openapi_tags=tags_metadata, lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 
 @app.post('/predict', tags=["prediction"])
 async def get_prediction(file: UploadFile):
