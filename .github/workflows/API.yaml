@@ -25,9 +25,9 @@ jobs:
 
       - name: Install Dependencies Apt
         run: |
-          apt-get update
-          apt-get -y install tesseract-ocr
-          apt-get install poppler-utils -y 
+          sudo apt-get update
+          sudo apt-get -y install tesseract-ocr
+          sudo apt-get install poppler-utils -y 
 
       - name: Install dependencies
         run: |
