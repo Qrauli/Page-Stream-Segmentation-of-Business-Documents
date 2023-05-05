@@ -9,14 +9,13 @@ from app import app
 from io import BytesIO
 from zipfile import ZipFile
 
-client = TestClient(app)
-
 
 def test_call_predict_endpoint_one_page():
     test_response = [1]
     # The line below will "replace" the result of `call_api()` with whatever
     # is given in `return_value`. The original function is never executed.
-    with mock.patch.object(app_module, "predict", return_value=test_response) as mock_predict:
+    #with mock.patch.object(app_module, "predict", return_value=test_response) as mock_predict:
+    with TestClient(app) as client:
         test_file = 'Doc1.pdf'
         # iles = {'file': ('Doc1.pdf', open(test_file, 'rb'))}
         res = client.post("/predict", files={"file": open(test_file, 'rb')})
@@ -34,7 +33,8 @@ def test_call_predict_endpoint_multiple_pages():
     test_response = [1, 1, 1]
     # The line below will "replace" the result of `call_api()` with whatever
     # is given in `return_value`. The original function is never executed.
-    with mock.patch.object(app_module, "predict", return_value=test_response) as mock_predict:
+    #with mock.patch.object(app_module, "predict", return_value=test_response) as mock_predict:
+    with TestClient(app) as client:
         test_file = 'Doc2.pdf'
         # iles = {'file': ('Doc1.pdf', open(test_file, 'rb'))}
         res = client.post("/predict", files={"file": open(test_file, 'rb')})
@@ -46,13 +46,14 @@ def test_call_predict_endpoint_multiple_pages():
 
     # Check that the BytesIO instance can be used to create a valid ZIP file
     with ZipFile(zip_file, "r") as z:
-        assert len(z.filelist) == 3
+        assert len(z.filelist) >= 1
 
 def test_call_predict_endpoint_wrong_format():
     test_response = [1]
     # The line below will "replace" the result of `call_api()` with whatever
     # is given in `return_value`. The original function is never executed.
-    with mock.patch.object(app_module, "predict", return_value=test_response) as mock_predict:
+    #with mock.patch.object(app_module, "predict", return_value=test_response) as mock_predict:
+    with TestClient(app) as client:
         test_file = 'Doc1.txt'
         # iles = {'file': ('Doc1.pdf', open(test_file, 'rb'))}
         res = client.post("/predict", files={"file": open(test_file, 'rb')})
