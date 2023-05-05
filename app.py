@@ -14,6 +14,7 @@ import tensorflow as tf
 import numpy as np
 from transformers import TFLayoutLMModel, LayoutLMTokenizer
 from huggingface_hub import from_pretrained_keras
+from config import settings
 
 tags_metadata = [
     {
@@ -124,6 +125,8 @@ async def predict(pdf_content: bytes):
         batch_generator = tf.data.Dataset.from_generator(lambda: generator(input_data),
                                                         output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.int64))
 
+
+        # settings.batch_size
         input_ids, bbox, attention_mask, token_type_ids, image = batch_generator.batch(len(input_data)).get_single_element()
         classification = model([input_ids, bbox, attention_mask, token_type_ids, image])
     except tf.errors.ResourceExhaustedError as e:
