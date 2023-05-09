@@ -28,7 +28,7 @@ Run the **download_dataset.sh** file to download the train, validation and tests
 For the evaluation script the **test.csv** file in **predictions** is also needed. It is used for grouping documents into folders. Place it in the same folder as the script.
 
 Supported command line arguments:
-- Use the **--clear** flag to reset the created cash file in both the training and evaluation script.
+- Use the **--clear** flag to reset the created cache file in both the training and evaluation script.
 - Use the **--resume** flag to continue training from the last training run (after last completed epoch).
 - Use **--batch** to specify the batch size to be used in training.
 
