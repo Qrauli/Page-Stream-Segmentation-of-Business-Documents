@@ -1,5 +1,5 @@
 # Page-Stream-Segmentation-of-Business-Documents
-Bachelor thesis project developing a PSS System with a multi-modal neural network. A sufficiently powerful Nvidia graphics card is needed to run the model. If not available refer to the Google Colab section.
+Bachelor thesis project developing a PSS System with a multi-modal neural network. 
 
 ## Run API
 The API is available as a docker container. Docker has to be installed to use the container.
@@ -8,7 +8,7 @@ Run the following commands to start the API.
     docker build -t pss-business-documents .
     docker run -d -p 80:80 --name pss-api pss-business-documents
 
-To lower the batch sized used for inference set the environment variable **BATCH_SIZE**.
+To lower the batch size used for inference set the environment variable **BATCH_SIZE**.
 
 ## Google Colab 
 The API is also available as a Google Colab notebook.
@@ -17,6 +17,8 @@ Open the following link and follow the instructions in the notebook to run the A
 https://colab.research.google.com/github/Qrauli/Page-Stream-Segmentation-of-Business-Documents/blob/main/PSS_Business_Documents.ipynb
 
 ## Training and Testing
+A sufficiently powerful Nvidia graphics card is needed to retrain the model.
+
 To retrain the model run the **training.py** script in the **models** folder.
 For testing the model use the **evaluate.py** script.
 
@@ -36,3 +38,6 @@ The following commands work for Linux systems and were tested with Python 3.9:
     pip install -r requirements.txt
     apt-get -y install tesseract-ocr
     apt-get install poppler-utils -y
+
+## Final Model
+You can find the final model on HuggingFace: https://huggingface.co/qrauli/pss-business-documents
