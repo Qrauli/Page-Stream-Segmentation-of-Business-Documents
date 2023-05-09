@@ -29,6 +29,7 @@ def test_call_predict_endpoint_one_page():
     with ZipFile(zip_file, "r") as z:
         assert len(z.filelist) == 1
 
+
 def test_call_predict_endpoint_multiple_pages():
     test_response = [1, 1, 1]
     # The line below will "replace" the result of `call_api()` with whatever
@@ -47,6 +48,7 @@ def test_call_predict_endpoint_multiple_pages():
     # Check that the BytesIO instance can be used to create a valid ZIP file
     with ZipFile(zip_file, "r") as z:
         assert len(z.filelist) >= 1
+
 
 def test_call_predict_endpoint_wrong_format():
     test_response = [1]

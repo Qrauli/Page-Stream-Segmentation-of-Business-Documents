@@ -32,8 +32,7 @@ async def lifespan(app: FastAPI):
     # Load the ML model
     global model
     global tokenizer
-    model = from_pretrained_keras("qrauli/pss-business-documents", custom_objects={"TFLayoutLMModel":
-    TFLayoutLMModel})
+    model = from_pretrained_keras("qrauli/pss-business-documents", custom_objects={"TFLayoutLMModel": TFLayoutLMModel})
     # model = "t"
     tokenizer = LayoutLMTokenizer.from_pretrained("microsoft/layoutlm-base-uncased")
     yield
@@ -107,53 +106,70 @@ async def predict(pdf_content: bytes):
 
     # convert each image to input data
     input_data = []
-    try:
-        for image in images:
-            pil_image = image
-            image_tensor = image_to_tensor(tf.convert_to_tensor(pil_image), (224, 224))
-            pil_image = pil_image.filter(ImageFilter.MedianFilter())
-            pil_image = pil_image.resize((1000, 1000))
-            enhancer = ImageEnhance.Contrast(pil_image)
-            pil_image = enhancer.enhance(2)
-            pil_image = pil_image.convert('1')
-            dataframe = pytesseract.image_to_data(pil_image, output_type=pytesseract.Output.DATAFRAME)
-            input_ids, bbox, attention_mask, token_type_ids = tokenize_from_ocr("", tokenizer, 100, dataframe)
-            input_data.append(
-                {"image": image_tensor, "input_ids": input_ids, "bbox": bbox, "attention_mask": attention_mask,
-                "token_type_ids": token_type_ids})
 
-        batch_generator = tf.data.Dataset.from_generator(lambda: generator(input_data),
-                                                        output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.int64))
+    for image in images:
+        pil_image = image
+        image_tensor = image_to_tensor(tf.convert_to_tensor(pil_image), (224, 224))
+        pil_image = pil_image.filter(ImageFilter.MedianFilter())
+        pil_image = pil_image.resize((1000, 1000))
+        enhancer = ImageEnhance.Contrast(pil_image)
+        pil_image = enhancer.enhance(2)
+        pil_image = pil_image.convert('1')
+        dataframe = pytesseract.image_to_data(pil_image, output_type=pytesseract.Output.DATAFRAME)
+        input_ids, bbox, attention_mask, token_type_ids = tokenize_from_ocr("", tokenizer, 100, dataframe)
+        input_data.append(
+            {"image": image_tensor, "input_ids": input_ids, "bbox": bbox, "attention_mask": attention_mask,
+             "token_type_ids": token_type_ids})
 
-
-        # settings.batch_size
-        input_ids, bbox, attention_mask, token_type_ids, image = batch_generator.batch(len(input_data)).get_single_element()
-        classification = model([input_ids, bbox, attention_mask, token_type_ids, image])
-    except tf.errors.ResourceExhaustedError as e:
-        print("Not enough memory for running model prediction: Resources exhausted")
-        pdf_reader = PdfReader(io.BytesIO(pdf_content))
-        count = len(pdf_reader.pages)
-        categories = []
-        for i in range(count):
-            categories.append(1)
-        return categories
-    classification = classification.numpy()
-    categories = []
-    if classification.ndim == 1:
-        categories = [1]
-    else:
-        for classi in classification:
-            if classi[0] > classi[1]:
-                categories.append(1)
+    batch_generator = tf.data.Dataset.from_generator(lambda: generator(input_data),
+                                                     output_types=(tf.int32, tf.int32, tf.int32, tf.int32, tf.int64))
+    iterator = iter(batch_generator.batch(settings.batch_size).take(-1))
+    last_elem = None
+    classification = None
+    while True:
+        try:
+            input_ids, bbox, attention_mask, token_type_ids, image = next(iterator)
+            if last_elem:
+                input_ids_l, bbox_l, attention_mask_l, token_type_ids_l, image_l = last_elem
+                input_ids = tf.concat([tf.expand_dims(input_ids_l, 0), input_ids], axis=0)
+                bbox = tf.concat([tf.expand_dims(bbox_l, 0), bbox], axis=0)
+                attention_mask = tf.concat([tf.expand_dims(attention_mask_l, 0), attention_mask], axis=0)
+                token_type_ids = tf.concat([tf.expand_dims(token_type_ids_l, 0), token_type_ids], axis=0)
+                image = tf.concat([tf.expand_dims(image_l, 0), image], axis=0)
+            logits = model([input_ids, bbox, attention_mask, token_type_ids, image])
+            if last_elem:
+                logits = logits[1:]
+            last_elem = (input_ids[-1], bbox[-1], attention_mask[-1], token_type_ids[-1], image[-1])
+            logits = logits.numpy()
+            if logits.ndim == 1:
+                logits = np.expand_dims(logits, axis=0)
+            if classification is not None:
+                classification = np.append(classification, logits, 0)
             else:
-                categories.append(0)
+                classification = logits
+        except tf.errors.OutOfRangeError:
+            break
+        except StopIteration as e:
+            break
+        except ValueError as e:
+            print(e)
+            continue
+        except tf.errors.ResourceExhaustedError as e:
+            print("Not enough memory for running model prediction: Resources exhausted")
+            pdf_reader = PdfReader(io.BytesIO(pdf_content))
+            count = len(pdf_reader.pages)
+            categories = []
+            for i in range(count):
+                categories.append(1)
+            return categories
+
+    categories = []
+    for classi in classification:
+        if classi[0] > classi[1]:
+            categories.append(1)
+        else:
+            categories.append(0)
     categories[0] = 1
-    # temporary split calculation
-    # pdf_reader = PdfReader(io.BytesIO(pdf_content))
-    # count = len(pdf_reader.pages)
-    # categories = []
-    # for i in range(count):
-        # categories.append(1)
     return categories
 
 
