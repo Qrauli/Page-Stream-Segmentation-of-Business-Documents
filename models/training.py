@@ -8,9 +8,12 @@ import h5py
 from keras.models import Model
 from PIL import Image
 import os
-import time
 import json
 from transformers import TFLayoutLMModel, LayoutLMTokenizer
+import pickle
+from classification_models.tfkeras import Classifiers
+import argparse
+import sys
 
 
 class Generator:
@@ -32,6 +35,7 @@ class Generator:
 
         # save each page in h5py file
         for page_id in self.page_ids:
+            #tokenize ocr data
             file_id = page_id.split('-')[0]
             path_tsv = path_data + "/" + file_id + "/" + f"{page_id}.tsv"
             input_ids, bbox, attention_mask, token_type_ids = tokenize_from_ocr(path_tsv, tokenizer, 100)
@@ -41,6 +45,8 @@ class Generator:
             group.create_dataset('attention_mask', data=attention_mask, compression="gzip")
             group.create_dataset('token_type_ids', data=token_type_ids, compression="gzip")
             path_img = path_data + "/" + file_id + "/" + f"{page_id}.jpg"
+
+            # preprocess image
             img = Image.open(path_img)
             image = image_to_tensor(tf.convert_to_tensor(img), input_img_size)
             group.create_dataset('image', data=image, compression="gzip")
@@ -53,8 +59,8 @@ def generator(df_pages, path_cache):
     while i < len(df_pages):
         page_id = df_pages.iloc[i]["page_id"]
         hf = h5py.File(path_cache, 'r')
-        # ocr
 
+        # ocr
         input_ids = tf.convert_to_tensor(np.array(hf[page_id + '/input_ids']))
         bbox = tf.convert_to_tensor(np.array(hf[page_id + '/bbox']))
         attention_mask = tf.convert_to_tensor(np.array(hf[page_id + '/attention_mask']))
@@ -74,15 +80,14 @@ def generator(df_pages, path_cache):
 
 
 def create_df(page_ids):
+    """Create pandas dataframe for pages"""
     pages = np.array([(id.split('-') + [id] if len(id.split('-')) == 2 else [id, '0', id]) for id in page_ids])
     df = pd.DataFrame(pages, columns=['doc_id', 'page_num', 'page_id'])
     return df
 
 
 def shuffle_df(df):
-    '''
-    Shuffle IDs while retaining the same page order within the document
-    '''
+    """Shuffle IDs while retaining the same page order within the document"""
     df_id = df.value_counts(subset='doc_id').to_frame(name='num_pages')
     # reassign document
     df_id = df_id.sample(frac=1)
@@ -95,18 +100,11 @@ def shuffle_df(df):
     return df
 
 
-# Image preprocessing
 def image_to_tensor(img, input_img_size):
     """converts grayscale image to tensorflow tensor with resnet specifications"""
-    # img = tf.image.rgb_to_grayscale(img)
     img = img[..., tf.newaxis]
     img = tf.image.grayscale_to_rgb(img)
-    # print(img.get_shape())
-    # img = img[tf.newaxis, ..., tf.newaxis]
     img = tf.image.resize(img, input_img_size)
-    # img = tf.transpose(img, perm=[2, 0, 1])
-    # layer = layers.Normalization(mean=[0.485, 0.456, 0.406], variance=[np.square(0.229), np.square(0.224),
-    # np.square(0.225)]) img = layer(img)
     return img
 
 
@@ -120,35 +118,6 @@ def get_label(page_id):
             return 1
         else:  # non-first page
             return 0
-
-
-# def build_model(hp):
-#    model = keras.Sequential()
-#    model.add(layers.Flatten())
-#    for i in range(1, hp.Int("num_layers", 5, 10)):
-#        model.add(
-#            layers.Conv1D(
-#                kernel_size=hp.Int("kernel", min_value=3, max_value=6, step=1),
-#                strides=1,
-#                padding="valid",
-#                data_format="channels_last",
-#                dilation_rate=1,
-#                groups=1,
-#                activation='relu',
-#                use_bias=True
-#            )
-#        )
-#    model.add(layers.Dense(2, activation="softmax"))
-#    model.compile(
-#        optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"],
-#    )
-#    return model
-
-
-# def create_df(page_ids):
-#    pages = np.array([(page_id.split('-') if len(page_id.split('-')) == 2 else [page_id, '0']) for page_id in page_ids])
-#    df = pd.DataFrame(pages, columns=['doc_id', 'page_num'])
-#    return df
 
 
 def extend_box(words, boxes, tokenizer):
@@ -207,7 +176,6 @@ def tokenize_from_ocr(path_tsv, tokenizer, max_seq_length, dataframe=None):
         temp_input_ids = input_ids.numpy()
         temp_input_ids[-1] = 102
         input_ids = tf.convert_to_tensor(temp_input_ids)
-        # input_ids[-1] = 102
         attention_mask = attention_mask[:max_seq_length]
         token_type_ids = token_type_ids[:max_seq_length]
     bbox = token_boxes
@@ -217,9 +185,13 @@ def tokenize_from_ocr(path_tsv, tokenizer, max_seq_length, dataframe=None):
 
 def create_model():
     """creates keras model based on pretrained models layoutlm and resnet combined with convolutional layers"""
-    layoutlm = TFLayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
-    resnet = keras.applications.ResNet50V2(weights="imagenet")
 
+    # pretrained models
+    layoutlm = TFLayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
+    ResNet18, preprocess_input = Classifiers.get('resnet18')
+    resnet = ResNet18((224, 224, 3), weights='imagenet')
+
+    # input layers
     input_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='input_ids')
     bbox_layer = tf.keras.Input(shape=(None, 4), dtype=tf.int32, name='bbox')
     token_type_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='token_type_ids')
@@ -233,33 +205,21 @@ def create_model():
 
     resnet = Model(resnet.input, resnet.layers[-2].output)
 
-    # sizes = [1280, 1067, 854, 641, 428, 215]
-    # 2816
-    sizes = [2347, 1878, 1409, 940, 471]
+    # convolutional layers
+    sizes = [1067, 854, 641, 428, 215]
     x = layers.concatenate([resnet.layers[-1].output, layoutlm_layer], 1)
-    # mypermute = lambda y: keras.backend.transpose(y)
-    # x = keras.layers.Lambda(mypermute)(x)
-    # x = keras.layers.Lambda(lambda x: tf.expand_dims(x, 2))(x)
-    x = keras.layers.Lambda(lambda x: tf.expand_dims(x, 0))(x)
-
-    # x = layers.Permute((2,1))(x)
-    # x = keras.Input(shape=(sizes[0],))
+    x = keras.layers.Lambda(lambda y: tf.expand_dims(y, 0))(x)
 
     for i in range(1, 5):
         x = layers.Conv1D(filters=sizes[i], kernel_size=3, strides=1, padding="same", data_format="channels_last",
                           dilation_rate=1, groups=1, use_bias=True)(x)
         x = layers.ReLU()(x)
-        x = layers.Dropout(0.3)(x)
+        x = layers.Dropout(0.2)(x)
     x = layers.Conv1D(filters=2, kernel_size=3, strides=1, padding="same", data_format="channels_last",
                       dilation_rate=1, groups=1, use_bias=True)(x)
     x = layers.ReLU()(x)
-    x = keras.layers.Lambda(lambda x: tf.squeeze(x))(x)
+    x = keras.layers.Lambda(lambda y: tf.squeeze(y))(x)
     x = layers.Softmax()(x)
-
-    # model.add(layers.Dense(2, activation="softmax"))
-    # model.compile(
-    # optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"],
-    # )
 
     model = keras.Model(
         inputs=[input_ids_layer, bbox_layer, token_type_ids_layer, attention_mask_layer, resnet.input],
@@ -268,23 +228,30 @@ def create_model():
     return model
 
 
-def validate(model, generator):
+def validate(model, validation_generator):
     """calculate validation error based on given model and generator returning validation data"""
     loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
-    iterator = iter(generator.batch(30).take(-1))
+    iterator = iter(validation_generator.batch(40).take(-1))
+    acc_metric = keras.metrics.CategoricalAccuracy()
+    rec_metric = keras.metrics.Recall()
+    acc1_metric = keras.metrics.Precision()
+    err_metric = keras.metrics.CategoricalCrossentropy()
     val_loss = 0
-    count = 0
     while True:
         try:
             count_batch = next(iterator)
-            count += 1
             # Do something with the batch
             input_ids, bbox, attention_mask, token_type_ids, image, labels, pageids = convert_batch(count_batch)
-            # outputs = model([input_ids, bbox, attention_mask, token_type_ids, image])
             with tf.GradientTape() as tape:
                 logits = model([input_ids, bbox, attention_mask, token_type_ids, image], training=False)
                 loss_value = loss_fn(labels, logits)
                 val_loss += float(loss_value)
+            acc_metric.update_state(labels, logits)
+            err_metric.update_state(labels, logits)
+            logits = tf.math.argmax(logits, axis=1)
+            labels = tf.math.argmax(labels, axis=1)
+            acc1_metric.update_state(labels, logits)
+            rec_metric.update_state(labels, logits)
 
         except tf.errors.InvalidArgumentError:
             print("Skipping batch with malformed tensor.")
@@ -293,8 +260,12 @@ def validate(model, generator):
             break
         except StopIteration as e:
             break
-    val_loss = val_loss / count
-    return float(val_loss)
+    val_loss = err_metric.result()
+    val_acc = acc_metric.result()
+    val_acc1 = acc1_metric.result()
+    val_rec = rec_metric.result()
+    val_f1 = 2 * (float(val_acc1) * float(val_rec)) / (float(val_rec) + float(val_acc1))
+    return float(val_loss), float(val_acc), float(val_acc1), float(val_rec), float(val_f1)
 
 
 def convert_batch(batch):
@@ -312,65 +283,80 @@ def convert_batch(batch):
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Train the model')
+    parser.add_argument('-c', '--clear', required=False, default=False, action="store_true",
+                        help="clear created cache files")
+    parser.add_argument('-r', '--resume', required=False, default=False, action="store_true",
+                        help="resume last training run")
+    parser.add_argument('-b', '--batch', type=int, required=False, default=40, help="batch size used in training")
+
+    args, unknown = parser.parse_known_args()
+
+    clear = args.clear
+    continue_train = args.resume
+    batch_size = args.batch
+
     path_model = "my_model.json"
-    if os.path.exists(path_model):
+    data_continue = []
+    if os.path.exists(path_model) and continue_train:
         print("reusing previous train data")
+        with open(path_model, "r") as file:
+            data_continue = json.load(file)
     else:
-        data = {"epoch": 0, "batch": 0, "best_val": 0, "early_stopping_cnt": 0}
+        data = {"epoch": 0, "best_val": 0, "early_stopping_cnt": 0}
+        if os.path.exists("./my_model.json"):
+            os.remove("./my_model.json")
         with open(path_model, "x") as file:
             json.dump(data, file)
 
-    model = create_model()
+    if continue_train:
+        model = keras.models.load_model('./my_model',
+                                        custom_objects={"TFLayoutLMModel": TFLayoutLMModel})
+    else:
+        model = create_model()
 
-    # configuration = LayoutLMv3Config()
-    # layoutlm = TFLayoutLMModel.from_pretrained("microsoft/layoutlm-base-uncased")
-    # layoutlm.build([None, 32, 32, 3])
-    # inputs = tf.keras.Input(shape=(224, 224, 3))
-    # layoutlm.call(inputs)
+    if clear:
+        if os.path.exists("./train.hdf5"):
+            os.remove("./train.hdf5")
+        if os.path.exists("./validation.hdf5"):
+            os.remove("./validation.hdf5")
 
-    # input_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='input_ids')
-    # bbox_layer = tf.keras.Input(shape=(None, 4), dtype=tf.int32, name='bbox')
-    # token_type_ids_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='token_type_ids')
-    # attention_mask_layer = tf.keras.Input(shape=(None,), dtype=tf.int32, name='attention_mask')
-
-    # layoutlm_layer = layoutlm({'input_ids': input_ids_layer, 'bbox': bbox_layer, 'token_type_ids': token_type_ids_layer, 'attention_mask': attention_mask_layer}).pooler_output
-    # layoutlm = tf.keras.Model(inputs=[input_ids_layer, bbox_layer, token_type_ids_layer, attention_mask_layer], outputs=layoutlm_layer)
-
-    # print(layoutlm.summary())
-    # layoutlm = Model(layoutlm.input, layoutlm.layers[-1].output)
-
-    # resnet = keras.applications.ResNet50V2(weights="imagenet")
-    # resnet = Model(resnet.input, resnet.layers[-2].output)
-
-    traingen = Generator("../../TABME/data/train/", "../../TABME/cache/train")
-    valgen = Generator("../../TABME/data/val/", "../../TABME/cache/validation")
+    traingen = Generator("./train", "./train")
+    valgen = Generator("./val", "./validation")
     dftrain = create_df(traingen.page_ids)
     dfval = create_df(valgen.page_ids)
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-                  loss=tf.keras.losses.BinaryCrossentropy(),
-                  metrics=['accuracy'])
 
     ds_counter_val = tf.data.Dataset.from_generator(lambda: generator(dfval, valgen.path_cache_folder),
-                                                        output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
-                                                                       'attention_mask': tf.int32,
-                                                                       "token_type_ids": tf.int32}, tf.int64, tf.int64,
-                                                                      tf.string))
+                                                    output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
+                                                                   'attention_mask': tf.int32,
+                                                                   "token_type_ids": tf.int32}, tf.int64, tf.int64,
+                                                                  tf.string))
 
     loss_fn = keras.losses.CategoricalCrossentropy(from_logits=False)
-    optimizer = keras.optimizers.experimental.AdamW(learning_rate=1e-5, weight_decay=0.01)
-    train_acc_metric = keras.metrics.CategoricalAccuracy()
+    optimizer = keras.optimizers.Adam(learning_rate=1e-5)
+    if continue_train:
+        with open('./optimizerstate.pickle', 'rb') as handle:
+            b = pickle.load(handle)
+        optimizer = keras.optimizers.Adam.from_config(b)
 
-    # val_acc_metric = keras.metrics.SparseCategoricalAccuracy()
+    train_acc_metric = keras.metrics.CategoricalAccuracy()
+    train_rec_metric = keras.metrics.Recall()
+    train_acc1_metric = keras.metrics.Precision()
+    train_err_metric = keras.metrics.CategoricalCrossentropy()
 
     epochs = 30
-    train_acc_old = 0
     min_val_loss = 1
     early_stopping_cnt = 0
+    if continue_train:
+        min_val_loss = data_continue["best_val"]
+        early_stopping_cnt = data_continue["early_stopping_cnt"]
     for epoch in range(epochs):
         print("\nStart of epoch %d" % (epoch,))
+        if continue_train:
+            if epoch < data_continue["epoch"]:
+                continue
 
         dftrain_shuffled = shuffle_df(dftrain)
-        print(dftrain_shuffled)
 
         ds_counter = tf.data.Dataset.from_generator(lambda: generator(dftrain_shuffled, traingen.path_cache_folder),
                                                     output_types=({"input_ids": tf.int32, 'bbox': tf.int32,
@@ -378,11 +364,8 @@ def main():
                                                                    "token_type_ids": tf.int32}, tf.int64, tf.int64,
                                                                   tf.string))
 
-        # start_time = time.time()
-        # print("Total time: ")
-
         counter = 0
-        iterator = iter(ds_counter.batch(64).take(-1))
+        iterator = iter(ds_counter.batch(batch_size).take(-1))
         data = []
         with open(path_model, "r") as file:
             data = json.load(file)
@@ -393,6 +376,7 @@ def main():
         while True:
             try:
                 count_batch = next(iterator)
+
                 # Do something with the batch
                 counter = counter + 1
                 data = []
@@ -402,7 +386,7 @@ def main():
                 with open(path_model, "w") as file:
                     json.dump(data, file)
                 input_ids, bbox, attention_mask, token_type_ids, image, labels, pageids = convert_batch(count_batch)
-                # outputs = model([input_ids, bbox, attention_mask, token_type_ids, image])
+
                 with tf.GradientTape() as tape:
                     logits = model([input_ids, bbox, attention_mask, token_type_ids, image], training=True)
                     loss_value = loss_fn(labels, logits)
@@ -412,23 +396,27 @@ def main():
 
                 # Update training metric.
                 train_acc_metric.update_state(labels, logits)
-
+                train_err_metric.update_state(labels, logits)
+                logits = tf.math.argmax(logits, axis=1)
+                labels = tf.math.argmax(labels, axis=1)
+                train_acc1_metric.update_state(labels, logits)
+                train_rec_metric.update_state(labels, logits)
                 # Log every 200 batches.
-                if counter % 50 == 0:
-                    print(
-                        "Training loss (for one batch) at step %d: %.4f"
-                        % (counter, float(loss_value))
-                    )
-                    print("Seen so far: %d samples" % ((counter + 1) * 64))
+                if counter % 200 == 0:
+                    print("Training loss (for one batch) at step %d: %.4f" % (counter, float(loss_value)))
+                    print("Seen so far: %d samples" % ((counter + 1) * 30))
 
                 if counter % 1000 == 0:
-                    val_loss = validate(model, ds_counter_val)
-                    print(
-                        "Validation loss at step %d: %.4f"
-                        % (counter, float(val_loss))
-                    )
+                    val_loss, val_acc, val_acc1, val_rec, val_f1 = validate(model, ds_counter_val)
+                    print("Validation loss at step %d: %.4f" % (counter, float(val_loss)))
+                    print("Validation acc at step %d: %.4f" % (counter, float(val_acc)))
+                    print("Validation precision at step %d: %.4f" % (counter, float(val_rec)))
+                    print("Validation recall at step %d: %.4f" % (counter, float(val_acc1)))
+                    print("Validation f1 at step %d: %.4f" % (counter, float(val_f1)))
                     if val_loss < min_val_loss:
-                        model.save("my_model")
+                        print("new best model!")
+                        early_stopping_cnt = 0
+                        model.save("best_model")
                         min_val_loss = val_loss
                         data = []
                         with open(path_model, "r") as file:
@@ -444,9 +432,9 @@ def main():
                         data["early_stopping_cnt"] = early_stopping_cnt
                         with open(path_model, "w") as file:
                             json.dump(data, file)
-                        if early_stopping_cnt > 5:
-                            print("Early Stopping: No improvement over last 5 models")
-                            break
+                        if early_stopping_cnt > 9:
+                            print("Early Stopping: No improvement over last 5 epochs")
+                            sys.exit()
 
                 # Display metrics at the end of each epoch.
             except tf.errors.InvalidArgumentError:
@@ -458,41 +446,24 @@ def main():
             except StopIteration as e:
                 print("End of dataset.")
                 break
-        # for count_batch in ds_counter.batch(64).take(-1):
-        train_acc = train_acc_metric.result()
-        if train_acc > train_acc_old:
-            train_acc_old = train_acc
-            model.save("my_model")
 
-        print("Training acc over epoch: %.4f" % (float(train_acc),))
+        train_acc = train_acc_metric.result()
+        train_acc1 = train_rec_metric.result()
+        train_rec = train_acc1_metric.result()
+        train_err = train_err_metric.result()
+        train_f1 = 2 * (float(train_acc1) * float(train_rec)) / (float(train_rec) + float(train_acc1))
+        model.save("my_model")
+        with open('./optimizerstate.pickle', 'wb') as file:
+            pickle.dump(optimizer.get_config(), file, protocol=pickle.HIGHEST_PROTOCOL)
+        print("Training Accuracy over epoch: %.4f" % (float(train_acc),))
+        print("Training Precision over epoch: %.4f" % (float(train_acc1),))
+        print("Training Recall over epoch: %.4f" % (float(train_rec),))
+        print("Training F1-Score over epoch: %.4f" % (float(train_f1),))
+        print("Training error over epoch: %.4f" % (float(train_err),))
         train_acc_metric.reset_state()
-    # for count_batch in ds_counter.batch(64).take(-1):
-    # inputs, image, labels, pageids = count_batch
-    # print(tf.squeeze(image))
-    # print(labels)
-    # print(image)
-    # imageinformation = resnet(image)
-    # print(imageinformation.get_shape())
-    # input_ids = inputs['input_ids']
-    # bbox = inputs['bbox']
-    # attention_mask = inputs['attention_mask']
-    # token_type_ids = inputs['token_type_ids']
-    # textinformation = layoutlm([input_ids, bbox, token_type_ids, attention_mask])
-    # textinformation = layoutlm(input_ids=input_ids, bbox=bbox, attention_mask=attention_mask, token_type_ids=token_type_ids)['pooler_output']
-    # print(textinformation.get_shape())
-    # features = tf.concat([imageinformation, textinformation], 1)
-    # print(features.get_shape())
-    # outputs = model([input_ids, bbox, attention_mask, token_type_ids, image])
-    # print(outputs)
-    # print(outputs.get_shape())
-    # print(output)
-    # build_model(keras_tuner.HyperParameters())
-    # tuner = keras_tuner.Hyperband(build_model,
-    #           objective='val_accuracy',
-    #   max_epochs=10,
-    #   factor=3,
-    #   directory='my_dir',
-    #  project_name='intro_to_kt')
+        train_acc1_metric.reset_state()
+        train_rec_metric.reset_state()
+        train_err_metric.reset_state()
 
 
 if __name__ == "__main__":
