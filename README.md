@@ -26,6 +26,7 @@ The dataset can be found at https://github.com/aldolipani/TABME in the **data** 
 Run the **download_dataset.sh** file to download the train, validation and tests datasets and place them in the same folder as the training resp. evaluation script.
 
 For the evaluation script the **test.csv** file in **predictions** is also needed. It is used for grouping documents into folders. Place it in the same folder as the script.
+The evaluation script tests the model found in the **best_model** folder in the same directory.
 
 Supported command line arguments:
 - Use the **--clear** flag to reset the created cache file in both the training and evaluation script.
